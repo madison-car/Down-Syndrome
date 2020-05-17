@@ -1,0 +1,716 @@
+```{r}
+#Setup the Environment 
+install.packages(c("psych","Metrics","stats","arules","scatterplot3d","neuralnet"
+                   ,"psych","caret","SwarmSVM","pROC","class","nnet","klaR", "Hmisc","corrplot",
+                 "rpart","ggbiplot","kknn","FactoMineR","factoextra","randomForest"))
+```
+```{r}
+library(psych)
+library(stats)
+library(Metrics)
+library(arules)
+library(scatterplot3d)
+library(SwarmSVM)
+library(pROC)
+library(neuralnet)
+library(class)
+library(nnet)
+library(caret)
+library(kknn)
+library(klaR)
+library(Hmisc)
+library(corrplot)
+library(rpart)
+library(FactoMineR)
+library(factoextra)
+library(randomForest)
+```
+
+*********
+## *Part 1: Business Understanding* 
+
+>  An abnormality on the 21st chromosome causes someone to have Down syndrome, which is an intellectual disability. The amount of individuals affected by this is 1 out of 1000 births. Researchers have studied the expression of 77 genes under healthy and experimental conditions. The experimental condition it's when the mouse has trisomy, which is the abnormality on the 21st chromosome. Determining which genes have the highest level of variation in the data set can assist researchers in determining which genes are most affected under trisomy conditions. Using that information, researchers can develop therapeutics to target the expression of those genes to increase the quality of life for people with Down syndrome (https://doi.org/10.1371/journal.pone.0129126).    The overall goal is to predict whether someone has Down syndrome based on the expression of 77 genes. Additional questions to be answered throughout this project include: are all 71 genes necessary to determine if someone has Down syndrome? How many genes are affected by the trisomy condition? Are there any high correlations between specific genes? Can the models predict the exact treatment group and condition or just treatment versus control? The data set was acquired from UCI machine learning repository. Link to the dataset:  https://archive.ics.uci.edu/ml/datasets/Mice%20Protein%20Expression. 
+
+ * Information on the Dataset: 
+    + 71 genes
+    + 1080 samples: 570 control samples and 510 treatment samples 
+    + Total datapoints: 76680
+
+### Data Acquisition
+
+>The data was imported in a csv format. Columns were already included in the file, so they weren't added. 
+
+```{r}
+# Imported the data 
+DSD <- read.csv("Data.csv")
+```
+
+******
+
+## *Part 2: Data Exploration* 
+
+>In this section, I look over all the data, so I can make sure the data was imported correctly and determine what type of format. The type of format is important because certain functions will only work with numeric data vs. cateogrical. Additionally, I needed to know what type of data that I was working with for all of the models. 
+
+```{r}
+# Looked at the type of data 
+str(DSD)
+```
+
+>There are four columns of categorical data that get presented as factors, but all other data is numerical.
+
+******
+
+### Is there any Missing Values?
+
+>In this section, I determine if there if there are any missing values and if there are, how many.  Algorithms such as Knn and Neuralnet can not run properly with missing values. Additionaly, it makes it difficult to determine if there are correlations between the features if there are missing entries.  
+
+```{r}
+# Printed the amount of NAs in each column 
+ na_count <- sapply(DSD,function(y) sum(length(which(is.na(y)))))
+# Put the results into a dataframe
+na_count <- data.frame(na_count)
+# Showed the results 
+na_count
+```
+
+>The table above shows the amount of missing values in each column. While most columns only have a few missing values,columns BAD_N, BCL2_N, EGR1_N, pCFOS_N and H3Mek4_N have to between 75-270 NAs. These columns must be removed from the dataframe since replacing those values would go above the acceptable 10%. There is enough datapoints in the dataframe that I'm not worried about removing a few columns. 
+
+```{r}
+# Columns with too many NAs were removed from the dataframe
+DSD <- subset(DSD, select = -c(BAD_N,BCL2_N,H3AcK18_N,EGR1_N,H3MeK4_N,EGR1_N,pCFOS_N))
+# Displaying the colnames 
+colnames(DSD)
+``` 
+
+> Displayed the column names to ensure that the correct columns were removed from the dataset. 
+
+```{r}
+# Determining if there is still any Missing Values
+# Removed the NAs 
+DSD_NA <- DSD
+DSD_NA <- na.omit(DSD_NA)
+
+# Determing how many rows were removed due to NAs
+cat("\nDF without NAs","=",nrow(DSD_NA))
+cat("\nDF with NAs","=",nrow(DSD))
+```
+
+>Removing the columns with a substantial amount of missing values has shown to be the correct approach, since removing all NAs would have reduced the dataset by at least 270 entries. The remaining missing values can be filled in using mean imputation, since the missing entries are numeric. 
+
+******
+
+### Are there any outliers 
+
+> In this section, I'm determining are there any outliers in the data. To determine if there are outliers, I had to calculate the mean and standard deviation for each gene(column) and each for each treatment group. Outliers can't just be determined for each column(gene), because if the experiments were done correctly then you would expect to see a change in expression levels going one treatment group to the next. 
+
+```{r}
+# Named the column names as proteins
+proteins <- colnames(DSD[, 2:72])
+# Named the classes 
+classes <- levels(DSD$class)
+# Made a data frame 
+means <- as.data.frame(matrix(0.0, nrow = length(classes), ncol = length(proteins)))
+colnames(means) <- proteins
+rownames(means) <- classes
+# Calculated the mean for each protein and treatment group 
+for (class in classes) {
+  for (protein in proteins) {
+    means[class, protein] <- mean(DSD[DSD$class == class, protein], na.rm = TRUE)
+  }
+}
+# Looked at the top 6 rows of means for each column and group 
+head(means)
+```
+
+```{r}
+sigmas <- as.data.frame(matrix(0.0, nrow = length(classes), ncol = length(proteins)))
+colnames(sigmas) <- proteins
+rownames(sigmas) <- classes
+
+for (class in classes) {
+  for (protein in proteins) {
+    sigmas[class, protein] <- sd(DSD[DSD$class == class, protein], na.rm = TRUE)
+  }
+}
+# Looked at the top 6 of means for each column and group 
+head(sigmas)
+```
+
+
+```{r}
+# Created a summary stats on a column with a large amount of outliers
+DSD_check_pP70S6_N <- summary(DSD$pP70S6_N)
+# Checked that it was saved correctly 
+DSD_check_pP70S6_N
+```
+ 
+ >I saved the pp70s6_N column so it could be used later to check that mean impuation worked correctly and didn't alter the data too dramatically. 
+
+******
+
+## *Part 3: Data Preparation* 
+
+******
+
+>The purpose of this section is to now clean and shape the data, so that it will be in a usuable format for the models and determine if there are any correlations between the genes.
+
+### Replacing the missing values by mean imputation 
+
+>In this section, I replace the NAs using mean impuation. The majority of the columns(genes) are only missing a few entries and I wouldn't exceed modifying 10% of the data by imputing these values. Mean Imputation was chosen over a predictive model such as Multiple Regression Model due to the time issue. Mean Imputation can be applied on a large scale which needs to be performed here, since around 70 columns have missing values. A predictive model would be better suited if less features needed modifying since all of the models would need to be validated. 
+
+```{r}
+#Saved a column that list which rows have NAs
+# This column will be used later to check that mean impuation was successful
+ELK_N_miss_ind <- is.na(DSD$ELK_N)
+```
+
+>I saved a copy of the ELK_N column where it list either true and falses depending if there is a missing values. The reason for saving this column is so that it can be used later to check that mean impuation was done correctly and doesn't alter the data too much.
+
+```{r}
+# Built a for loop to perform mean imputation on the entire dataframe 
+for(i in 1:ncol(DSD)) {
+  DSD[ , i][is.na(DSD[ , i])] <- mean(DSD[ , i], na.rm = TRUE)
+}
+
+#Checking that Mean Impuation was effective and accurate 
+# Looked at the summary stats of the ELK_N with the NA still in the column
+round(summary(DSD$ELK_N[ELK_N_miss_ind == FALSE]), 2)
+# Looks at the summary stats for the ELK_N column after mean imputation was performed
+round(summary(DSD$ELK_N), 2)
+```
+
+```{r}
+# Printed the amount of NAs in each column 
+ na_count <- sapply(DSD,function(y) sum(length(which(is.na(y)))))
+# Put the results into a dataframe
+na_count <- data.frame(na_count)
+# Showed the results 
+na_count
+```
+
+>Did a final check to make sure there were no NAs left in the dataframe. Using the summary stats you can see that using mean impuation didn't drastically change the dataset.Therefore, is an acceptable method for replacing the values. 
+
+******
+
+### Replacing outliers by mean impuation 
+
+>In this section, I am using the mean and sd values that were calculated for each gene(column) and treatment in the previous section to determine the outliers. The majority of the columns(genes) only have a few outliers and I wouldn't exceed modifying 10% of the data by imputing these values. Mean Imputation was chosen over a predictive model such as Multiple Regression Model due to the time issue. Mean Imputation can be applied on a large scale which needs to be performed, since almost all columns have a few outliers. A predictive model would be better suited if less features needed modifying since all of the models would need to be validated.
+
+```{r}
+# Determined the outliers for all the columns 
+# Made a function to determine the outliers 
+check_outliers <- function(val, mean, sd) {
+  result <- ((mean - 3.0*sd) > val || val > (mean + 3*sd))
+  return(result)
+}
+
+# (class, protein, value) indexing
+# Create an array to hold the outliers for each protein, dependent on which class it is a part of
+outliers <- array(FALSE, dim=c(nrow(DSD), length(colnames(means)), length(rownames(means))), 
+                               dimnames=list(1:nrow(DSD), colnames(means), rownames(means)))
+
+outliers_changed <- DSD[2:72]
+
+# iterate through each protein in the original data
+for (protein in proteins) {
+  num_outliers <- 0
+  
+  # iterate through each sample in the original data
+  for (row in 1:nrow(DSD)) {
+    class <- DSD[row, "class"]
+    
+    # if that sample's value for this particular protein is an outlier, replace it with the mean
+    if (check_outliers(DSD[row, protein], means[class, protein], sigmas[class, protein])) {
+      outliers_changed[row, protein] <- means[class, protein]
+      num_outliers <- num_outliers + 1
+    }
+  }
+  
+  # Printed the amount of outliers in each column
+  cat("Number of outliers for", protein, "=", num_outliers, fill = TRUE)
+}
+```
+
+> I counted the amount of outliers in each column to make sure none of them went over 10%, since that was my cut off. 
+
+```{r}
+# Checked the distribution of data 
+# Summary of the data without any outliers 
+summary(DSD$pP70S6_N)
+# Summary of the data with outliers
+DSD_check_pP70S6_N
+```
+
+> Looking over the summary stats shows that Replacing the outliers didn't affect the data overall 
+
+### Looked at the correlations between genes 
+
+> Now that the data isn't missing any values and doesn't have any outliers, I can look at the correlations. Correlations are very important for researchers because working with so many genes and data points it can be easy to over look correlations. Also, researchers will work with preliminary data where they don't have a solid idea of what to expect, so having correlations are very important. The p-values are also included, since statistical significance is very important when interpretting results in science. 
+
+
+```{r}
+# Created a matrix 
+cor_data <- as.matrix(DSD[2:71])
+# Calcualted the correlations on all of the data 
+corr <- Hmisc::rcorr(cor_data)
+# 
+CorrMatrix <- function(cormat,pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+      row = rownames(cormat)[row(cormat)[ut]],
+      column = rownames(cormat)[col(cormat)[ut]],
+      cor = (cormat)[ut], 
+      p = pmat[ut]
+  )
+}
+
+corr <- Hmisc::rcorr(cor_data)
+CorrMatrix <- CorrMatrix(corr$r,corr$P)
+head(CorrMatrix, n= 2000)
+```
+
+> The first 10 entries don't have p-values that are significant. However, if you look at page two you will notice that there is statiscal significance when looking at the correlations between genes. 
+
+### Data Plots
+
+> In this section, I build a heat map to display all of the correlations between the genes- this is easier to visualize than looking through all of the data.Additionally, building the graphs are more user friendly and show a big picture. Additionally, I used pairs.panel to look at the distribution of the data and determine if any type of transformations need to take place. 
+
+### Heatmap-Correlations
+```{r}
+# Assigned the colors for the heatmaps 
+heatmaps <- colorRampPalette(c("blue","red","white"))(20)
+# Built and displayed a heatmap 
+heatmap(x= corr$r, col = heatmaps, symm = TRUE)
+```
+
+> A heatmap was used to show the correlations between the genes. Heatmaps should be used because they can tell the big picture of the data. They are also good to use over making 100s of smaller graphs. 
+
+### Pairs Panel-Distribution and Normality of the data
+```{r}
+#Looked at the distribution of the data
+pairs.panels(DSD_NA[c("ITSN1_N","BDNF_N","NR1_N","NR2A_N","DYRK1A_N","pAKT_N","pBRAF_N","pCAMKII_N","pCREB_N","pELK_N")])
+```
+```{r}
+# Looked at the distribution of the data
+pairs.panels(DSD_NA[c("pERK_N","pJNK_N","PKCA_N","pMEK_N","pNR1_N","pNR2A_N","pNR2B_N","pPKCAB_N","BRAF_N","CAMKII_N")])
+```
+```{r}
+# Log transformed the data to see if it would imporved the normality
+hist(log(DSD$pBRAF_N), main = "Histogram of pBRAF_N" , xlab = "log transformed pBRAF_N")
+```
+
+```{r}
+# Made a histogram of ITSN1_N 
+hist(log(DSD$ITSN1_N), main = "Histogram of ITSN1_N" , xlab = "log transformed ITSN1_N")
+```
+
+
+>I looked over the normality and skewedness of the data, because its distribution can negatively impact how the models operate. The majority of the data has a good distribution, so there is no reason to log transform all of the data. Additionally, log transforming the pERK_N didn't alter its distribution enough where it would be adventagious to apply this technique to an entire dataframe and log transforming pBRAF_N made it worse. Going forward I will be choosing models that are no effected as severly by data that it is not perfectly distributed or has skew 
+
+### PCA- Principal Component Analysis 
+```{r}
+# Made a dataframe with only the numeric columns 
+DSD.setup.pca <- DSD[2:72]
+# Ran a Principal Component Analysis on the data
+PCA <- PCA(DSD.setup.pca, scale.unit = TRUE)
+```
+```{r}
+# Got the Eigenvalues on the data
+eig.val <- get_eigenvalue(PCA)
+# Reviewed the results 
+eig.val
+```
+
+> Currently, there are 71 genes that could be included in the models. However, that will just lead to slower models and isn't good practice. From the PCA results, I can tell that the first 18 features account for 90% of the varability in the dataframe. Therefore, the rest of the features are not required. However, I ran through the models with only 18 features and had significantly reduced accuracy values, so I decided to use 30 features. The 30 features account for 95% of the variability in the dataset.
+
+
+******
+
+## *Part 3:Data Preparation*
+
+>In this section, the data is divided into three different groups: training,testing and validation. A validation data set had to be created since I build a stacked learner and all of the algorithms before it had been introduced to the training and testing data. The values for each dataset where determined by trail and error. 
+
+```{r}
+# Divided the data into 80/20 split 
+#Split first 80% into training dataset 
+set.seed(123)
+# grab a few samples for ensemble prediction to validate everything
+sample_indexes <- sample.int(n=nrow(DSD), 5, replace=F)
+samples <- DSD[sample_indexes, 2:30]
+
+DSD_drawing <- DSD[-sample_indexes, ]
+# Made the training dataset 
+DSD_train_indexes <- sample.int(n = nrow(DSD_drawing), size = floor(.60*nrow(DSD_drawing)), replace = F)
+DSD_train <- DSD[DSD_train_indexes, 2:30]
+DSD_train_class <- data.frame(DSD_train, class=DSD$class[DSD_train_indexes])
+
+# Split remaining 20% into testing and validation 
+DSD_test_indexes <- sample.int(n = nrow(DSD_drawing), size = floor(.30*nrow(DSD_drawing)), replace = F)
+DSD_test <- DSD[DSD_test_indexes, 2:30]
+DSD_test_class <- data.frame(DSD_test, class=DSD$class[DSD_test_indexes])
+
+#to validate the stacked method
+DSD_validation_indexes <- sample.int(n = nrow(DSD_drawing), size = floor(.10*nrow(DSD_drawing)), replace = F)
+DSD_validation <- DSD[DSD_validation_indexes, 2:30]
+DSD_validation_class <- data.frame(DSD_validation, class=DSD$class[DSD_validation_indexes])
+```
+
+
+```{r}
+# Did a final check that there are no missing values 
+which(is.na(DSD_train))
+which(is.na(DSD_test))
+```
+
+
+******
+
+## *Part 4:Modeling/Evaluation* 
+
+
+### Regression Tree and Random Forest
+
+>I wanted to build a decision tree, but the 31 features were numeric data. I didn't want to bin all of the features since that would lead to reduced accuracy. Additionally, in research, each data point is increadibly important since many times reserachers don't have large datasets, so it's not adventagous to group data. A regression tree is a good model to build since it can handle numeric data.
+
+```{r}
+# Built the model for the regression tree 
+regression_tree <- rpart(class ~., data = DSD_train_class,method = "class",minsplit =4, minbucket =1)
+# Pruned the tree based on the CP values 
+rg_2 <- prune(regression_tree, cp = regression_tree$cptable[which.min(regression_tree$cptable[,"xerror"]),"CP"])
+# Plotted the results from second regression tree model 
+plot(rg_2, uniform = TRUE, main ="Pruned Classification Tree for Classes")
+text(rg_2,use.n = TRUE, all = TRUE, cex =0.09)
+```
+
+```{r}
+# Used the model to make predictions 
+rg_2_predict <- predict(rg_2, DSD_test, type="class")
+# Used a confusion matrix to compare actual to predicted
+confusionMatrix(rg_2_predict, DSD_test_class$class)
+```
+
+>The confusion Matrix shows that the base model has an overall accuracy value of 72%. The Sensitivity and specificity values do have room for improvement for multiple classes.Class c-CS-s has the worst sensitivity value with t-SC-m being the next worst. Considering this model will be predicting whether someone has down syndrome it important for it to very accurate with its predictions. A random forest will be used to increase the accuracy of the models, since it can turn weak learners into strong learners. 
+
+*******
+
+```{r}
+# Built a RandomForest to increase the accuracy of the Regression Tree model 
+RF <- randomForest::randomForest(class ~., data = DSD_train_class)
+# Printed the results from the model 
+print(RF)
+```
+
+```{r}
+# Made the predictions on the testing dataset using the random forest dataset
+rf_predict <- predict(RF, DSD_test, type="class")
+# Looked at the accuracy of the model 
+confusionMatrix(rf_predict,DSD_test_class$class)
+```
+
+>Validating the random forest model showed that it was significantly more accurate than the basic regression tree since the accuracy value increased from 72% to 98%. Additionally, the random forest has an OOB estimate of error rate at 8.06%, which is acceptable. Also, looking at the statistics by class, you can see that the sensitivity and specificity values never drop below 90%, with multiple classes having 100%. Additionally, the balanced accuracy per class is always above 95%. Therefore, adding the random forest to turn weak learners into strong learners was the right decision. 
+
+******
+
+### Neural Network Model 
+
+>In the next section, I will be building a neural network model to predict the treatment group. I chose this model since it's capable of modeling more complex patterns and can be adapted to work with categorical and numeric data very efficiently. Neural Nets can take a more extended amount of time to run, which can make them bad for business. However, I have a smaller dataset, so this was not a problem (Lantz, Brett. Machine Learning with R: Learn How to Use R to Apply Powerful Machine Learning Methods and Gain an Insight into Real-World Applications. Packt Publ., 2015.) 
+
+```{r}
+# Built a Neuralnet model to predict treatment group 
+nn_model_1 <-nnet(class ~.,data = DSD_train_class, size = 1)
+# Determined the model results 
+nn_prediction_1 <- predict(nn_model_1, DSD_test, type="class")
+# Used a confusion matrix to see the accuracy of the model 
+confusionMatrix(factor(nn_prediction_1), factor(DSD_test_class$class))
+```
+
+>The results from the confusion matrix show that a basic neural net model is not performing well enough to predict the class accurately. The overall accuracy of the model is at 49% which means a random guess would be more accurate. Additionally, the sensitivity values for the majority of the classes were inferior, and only three classes had balanced accuracy values above 80%. Therefore, I will be tuning the model and changing the size of the hidden nodes - this should increase the accuracy, specificity and sensitivity values. 
+
+
+******
+
+### Tuned NeuralNet Model-Altered Hidden Nodes
+
+```{r}
+# Built a neuralnet model to predict if someone has downsyndrome
+hidden_nodes <- ceiling(sqrt(ncol(DSD_train_class)))
+# Built a Neuralnet model to predict treatment group 
+nn_model_2 <-nnet(class ~.,data = DSD_train_class,size = hidden_nodes )
+# Determined the model results 
+nn_prediction_2 <- predict(nn_model_2, DSD_test, type="class")
+# Used a confusion matrix to see the accuracy of the model 
+confusionMatrix(factor(nn_prediction_2), factor(DSD_test_class$class))
+```
+
+>The results from the second neural net model, which was altered by changing the number of hidden nodes, confirmed that it was effective at increasing the overall accuracy of the model; it's now at 81%. The statistics by class, show that C-CS-M and c-CS-s classes still struggle to have high sensitivity values. However, overall sensitivity values are incrased about 30%-80%. Additionally, the balanced accuracies by class are significantly better with the hidden nodes modifications.
+
+******
+
+### KNN models 
+
+> I decided to use kNN models to predict the treatment group, since these algorithms are good at classification and simple to employ. The only downside to the algorithm is that they do not produce an actual model. While this model is very sensitive to outliers and missing, I don't have to worry, since I replaced all outliers and NAs in previous steps(Lantz, Brett. Machine Learning with R: Learn How to Use R to Apply Powerful Machine Learning Methods and Gain an Insight into Real-World Applications. Packt Publ., 2015.). 
+
+### Deciding the K value for the KNN models
+
+>To save time, I decided to build a for loop that would determine the accuracy values of three different types of KNN and for K values 2-10. The results were then plotted on a graph so that I could easily visualize which kNN models and K values to use.
+
+```{r}
+# Built a function to calculate the accuracy of the results
+accuracy <- function(actual_labels, predicted_labels) {
+  accuracy <- length(which((actual_labels == predicted_labels) == TRUE))/length(predicted_labels)
+  
+  return(accuracy)
+}
+```
+
+```{r}
+# Created vectors for the accurary values to be stored in 
+k_vals <- 2:10
+weighted_acc <- numeric(9)
+regular_acc <- numeric(9)
+epan_acc <- numeric(9)
+
+# Made a loop to predict the values using each function
+# Then compare the accuracy from each function
+for (k in k_vals) {
+  #predictions
+  weighted_predictions <- kknn(class ~ ., train=DSD_train_class, test = DSD_test, k, kernel="gaussian")
+  regular_predictions <- class::knn(DSD_train, DSD_test, DSD_train_class$class, k)
+  epanech_predictions <- kknn(class ~ ., train=DSD_train_class, test = DSD_test, k, kernel="rank")
+  
+  #accuracy
+  weighted <- accuracy(weighted_predictions$fitted.values, DSD_test_class$class)
+  regular <- accuracy(regular_predictions, DSD_test_class$class)
+  epan <- accuracy(epanech_predictions$fitted.values,DSD_test_class$class)
+  cat(k, ":", weighted,regular,epan, "\n")
+  
+  weighted_acc[k-1] <- weighted
+  regular_acc[k-1] <- regular
+  epan_acc[k-1] <- epan
+}
+
+# Combined all the vectors into one table
+accuracy_table <- cbind(k_vals,weighted_acc,regular_acc,epan_acc)
+
+# Converted the table into a dataframe so it could be used in the ggplot 
+accuracy_tab <- as.data.frame(accuracy_table)
+```
+
+******
+
+```{r}
+# Created a ggplot of K_vals vs. my_acc
+p <- ggplot(accuracy_tab,aes(x = k_vals))
+  p <- p + geom_point(aes(y = weighted_acc, colour = "Weighted kNN Accuracy"))
+p <- p + geom_point(aes(y = regular_acc, colour = "Regular kNN Accuracy"))
+p <- p + geom_point(aes(y = epan_acc, colour = "Rank kNN Accuracy"))
+
+# Added a secondary axis 
+p <- p + scale_y_continuous(sec.axis = sec_axis(~.,name = " Regular kNN Accuracy"))
+
+# Adjusting the theme 
+p <- p + scale_colour_manual(values = c("blue", "red","green"))
+p <- p + labs(y = "Weighted kNN Accuracy", x = "K Values", colour = "Regular kNN Accuracy")
+
+# Repositiong the Legend 
+p <- p + theme(legend.position = c(0.8,0.6))
+# Displaying the current ggplot 
+p
+```
+
+> From the graph above, you can quickly tell that regular kNN accuracy decreases as the K value increases. I didn't want to include two types of weighted kNN, so I chose the gaussian weighted since it was more accurate. For both regular and weighted kNN, I decided to use a K value of 2. 
+
+******
+
+### Building the kNN models- Regular kNN
+
+>In this section, I will be building the regular KNN model. No modifications will be made to this model since the K value was established in the previous section. To validate this model, I will be building a multi-variant Roc curve, looking at the AUC value and building a confusion matrix. A multi-variant Roc curve had to be used because it is predicting eight different classes.
+
+```{r}
+# Added the class label
+cl <- DSD_train_class$class
+
+# Applied the knn function to the training and validation dataset
+knn_results <- class::knn(DSD_train, DSD_test, cl, k = 2)
+```
+
+```{r}
+# Determined the accuracy of the model 
+caret::confusionMatrix(knn_results,DSD_test_class$class)
+```
+
+```{r}
+# Used a multiclass roc curve to visualize 
+roc_curve_knn <- multiclass.roc(response=as.numeric(DSD_test_class$class), predictor=as.numeric(knn_results))
+# Looking over the results of the multivariant roc curve
+roc_curve_knn
+```
+
+```{r}
+# plotted the values 
+rs <- roc_curve_knn[['rocs']]
+plot.roc(rs[[1]])
+sapply(2:length(rs),function(i)lines.roc(rs[[i]], col = i))
+```
+
+> Validating the regular kNN model showed that this was a good model for predicting the classes. Starting with the confusion matrix, there is an overall accuracy value of 91%. The class-specific accuracy values were primarily in the high 90s, with the lowest was at 89%. Sensitivity values for T-C-  has the lowest value at 81%, while the rest of the classes had significantly higher sensitivity values. The AUC value for the multi-variant rock curve was at 93%, which shows that the model did very well at making accurate predictions. The graph of the Roc curve, additionally, shows that there's a very high accuracy value.
+
+
+******
+
+### Building the kNN models- Weighted kNN
+
+>In this section, I'm building the weighted kNN model with a K value of two. I decided to use a weighted kNN model, since some samples could be border lining on being outliers. Additionally, I used 3 standard deviations away to classify outliers, so some sample values might be negatively effecting the model. No modifications will be made to this model since the K value and type of model was determined in a previous section. To validate this model, I will be looking over a confusion matrix, building a multi-variant Roc curve, and accessing the AUC value.
+
+```{r}
+# Built the final weighted kNN model with a k value of 2
+final_weighted_pred <- kknn(class ~ ., train=DSD_train_class, test = DSD_test, k=3, kernel="gaussian")
+```
+```{r}
+# Determined the accuracy of the model 
+caret::confusionMatrix(final_weighted_pred$fitted.values,DSD_test_class$class)
+```
+
+```{r}
+# Used roc curve to compare the two models
+roc_curve_knn_weighted <- multiclass.roc(response=as.numeric(DSD_test_class$class), predictor=as.numeric(final_weighted_pred$fitted.values))
+# Looked at the results
+roc_curve_knn_weighted
+```
+
+```{r}
+# plotted the values 
+rs <- roc_curve_knn_weighted[['rocs']]
+plot.roc(rs[[1]])
+sapply(2:length(rs),function(i)lines.roc(rs[[i]], col = i))
+```
+
+>Validating the waited kNN model showed that it was more accurate at predicting the classes than all other algorithms. Starting with the confusion matrix, it has an overall accuracy value of 95%. The statistics by class shows that the sensitivity values are significantly increased compared to the regular kNN model. Additionally, some classes even have 100% accuracy- this is also shown with the specificity values. The accuracy values for each class are all above 90%. The multivariant area under the curve value is at 97%, showing that it is very good at making accurate predictions. The graph of the Roc curve, additionally, shows that this algorithm is very accurate at predicting the classes.
+
+******
+
+## Comparing Models 
+
+> Algorithms that have been used include Regression Tree, Random Forest, Neural Net,modified Neural Net, Regular kNN and Weighted kNN. The Regression Tree and unmodified NeuralNet will not be included in the ensemble due to it having such poor accuracy values. Comparing all of the top-performing models together, the Random Forest is the most effective with having an overall accuracy rating at 98%, with the weighted kNN at 95%. The regular kNN model had an accuracy of 91%, with the neural net model having the lowest accuracy at 81%. When looking at sensitivity and specificity values, the Random Forest model and weighted kNN are the most effective with having multiple instances with 100% accuracy. Regular kNN has three cases where it has sensitivity values in the 80%s while the majority of specificity values are in the high 90s. The neural net model has two instances where it has sensitivity values in the 50s and has specificity values in the 90s.None of the models listed get a perfect score for sensitivity, accuracy, and specificity for every class. Therefore, to try to increase accuracy sensitivity and specificity values, I will construct an ensemble that will take the majority vote on the predictions from the modified neural net, random forest, and the  2 kNN models. However, I am concerned that the usage of the modified neural net model could bring down the overall accuracy value of the ensemble.
+
+******
+
+### Building the Ensemble 
+
+
+>In this section, an ensemble is constructed using the two kNN models(weighted and regular), neural net, and the random forest. The ensemble will work by taking a majority vote since all of the algorithms are predicting categorical data. The majority vote from the ensemble will then be used as an additional feature going into the stacked learner. To validate the ensemble's predictions, I will be looking over a confusion matrix and assessing the overall statistics. I will also review the sensitivity, specificity, and balanced accuracy values for each class. 
+
+> I decided to build an ensemble to increse the accuracy of the final prediction. All of these algorithms on their own have some limitations. Overall, using an ensemble lets me reduce any background noise that was present in the earlier models and increase the accuracy, sensitivity and specificity values (Juhi. “Simple Guide for Ensemble Learning Methods.” Medium, Towards Data Science, 6 Mar. 2019, towardsdatascience.com/simple-guide-for-ensemble-learning-methods-d87cc68705a2). 
+```{r}
+mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+```
+
+```{r}
+# Built an ensemble model
+# Put all the predictions into a dataframe
+ensemble_prediction <- NULL
+
+my.majority_vote <- function(weighted, knn, nn,rf, class) {
+  ensemble_prediction <- data.frame(weighted, knn, nn,rf)
+  # Made the levels equal
+  levels(ensemble_prediction) <- levels(class)
+  #Added column names to the dataframe
+  colnames(ensemble_prediction) <- c("Weighted Knn", "Regular Knn", "NNet","RF")
+  #Created the column majority vote and made it have as many rows as the ensemble prediction
+  majority_vote <- vector(length = nrow(ensemble_prediction))
+  
+  # Created the for loop 
+  for (i in 1:nrow(ensemble_prediction)) {
+    majority_vote[i] <- mode(ensemble_prediction[i, ])[[1]]
+  }
+  majority_vote <- as.factor(majority_vote)
+  levels(majority_vote) <- levels(DSD_train_class$class)
+  
+  return(majority_vote)
+  # Put the majority vote in the dataframe with the ensemble predictions 
+}
+# Used summary to view all the predictions
+ensemble_prediction <- data.frame(Weighted_kNN = final_weighted_pred$fitted.values, kNN = knn_results, NN = nn_prediction_2,RF= rf_predict)
+ensemble_prediction <- data.frame(ensemble_prediction, majority = my.majority_vote(ensemble_prediction$Weighted_kNN, ensemble_prediction$kNN,
+                                                                                   ensemble_prediction$NN,ensemble_prediction$RF, DSD_train_class$class))
+confusionMatrix(ensemble_prediction$majority, DSD_test_class$class)
+```
+
+>Validating the ensemble showed that it is also very accurate at making predictions. However, the ensemble is not the most reliable at making the predictions the weighted kNN model and the random forest are more accurate. The reduction in the accuracy value could be due to the neural net algorithm since it only has an overall 81% accuracy. To increase the accuracy of the ensemble, I will be constructing a stacked learner. The majority vote from the ensemble will be used as a new feature in the stacked learners model.
+
+******
+
+### Stacked Learner 
+
+> In the next section of code, a stacked learner was built to predict the class label with a decision tree. The decison tree reads the results from all previous models, including the ensemble prediction, to make the final prediction. The final predictions was validated using the validation dataset since the models were previously trained using the testing data set and tested with the testing dataset.  
+
+```{r}
+#Added the class_ensemble column to the dataframe with ensemble predictions 
+stacked_emsemble <- data.frame(ensemble_prediction, class=DSD_test_class$class)
+# Looked over the dataframe to make sure it was working correctly 
+summary(stacked_emsemble, maxsum = 8)
+```
+
+```{r}
+# Built a Decision Tree model 
+# Used the KlaR package to build a decision tree model
+klar_nb <- klaR::NaiveBayes(class ~ ., data = stacked_emsemble, na.action = na.omit)
+
+# Use the previous models to predict the validation set
+nn_valid <- predict(nn_model_2, DSD_validation, type="class")
+rf_valid <- predict(RF, DSD_validation, type="class")
+knn_valid <- class::knn(DSD_train, DSD_validation, DSD_train_class$class, k = 2)
+wknn_valid <- kknn(class ~ ., train=DSD_train_class, test = DSD_validation, k=3, kernel="gaussian")$fitted.values
+ensemble_valid <- data.frame(Weighted_kNN = wknn_valid, kNN = knn_valid, NN = nn_valid, RF = rf_valid, majority = my.majority_vote(wknn_valid, knn_valid, nn_valid,rf_valid, DSD_validation_class$class))
+
+# Use the NaiveBayes model to predict values from the ensemble
+klar_predict <- predict(klar_nb, ensemble_valid)
+confusionMatrix(klar_predict$class, DSD_validation_class$class)
+```
+
+> Validating the stacked learner showed that it is slightly more accurate at making the class prediction over the ensemble, with an accuracy value of 98%. When looking at the statistics by class, you notice there are multiple instances where it is 100% accurate; there are no instances where it is less than 90%. All balanced accuracy values are over 95%, with two classes having 100% accuracy.
+
+******
+
+#### Comparing Models-Final 
+
+>Confusion matrixes were used to assess the accuracy of the ensemble and the stacked learner. The ensemble had an overall accuracy of 97%. When looking at the statistics by class, there are three instances where it obtained 100% sensitivity and two instances for specificity. In essence, this means the model is incredibly efficient at predicting true positives and true negatives. The balanced accuracy, for the ensemble, shows very high 90s across all classes. The confusion matrix for the stacked learner showed an overall accuracy at 98%, which is only one percent higher than the ensemble. However, there are 6 instances where sensitivity was 100 and 7 for specificity. Therefore,  the stacked learner is far more accurate at determining true positives and true negatives over the ensemble. Out of all algorithms going into the models, the random forest was the most comparable. It has an overall accuracy of 98%. The random forest scores a 100 five instances under sensitivity and four with specificity. Therefore, the random forest is more accurate than the ensemble and is only slightly less accurate at making true positive and true negative predictions than the stacked learner.
+
+****
+
+### *Part 5:Deployment* 
+
+> In this section, I used the stacked learner model on the five samples that were removed from the data set at the very beginning of the project. These samples had all treatment information removed and only have numeric features. The stacked learner will be predicting which class these five samples belong to. I also predict the classes for these 5 samples using just the Random Forest Algorithm, since it has been determined that it is just as accurate as the stacked learner. 
+
+```{r}
+# Built a Decision Tree model 
+# Used the KlaR package to build a decision tree model
+klar_nb <- klaR::NaiveBayes(class ~ ., data = stacked_emsemble, na.action = na.omit)
+
+# Use the previous models to predict the validation set
+nn_valid <- predict(nn_model_2, samples, type="class")
+rf_valid <- predict(RF, samples, type="class")
+knn_valid <- class::knn(DSD_train, samples, DSD_train_class$class, k = 2)
+wknn_valid <- kknn(class ~ ., train=DSD_train_class, test = samples, k=3, kernel="gaussian")$fitted.values
+ensemble_valid <- data.frame(Weighted_kNN = wknn_valid, kNN = knn_valid, NN = nn_valid, RF = rf_valid, majority = my.majority_vote(wknn_valid, knn_valid, nn_valid,rf_valid, DSD_validation_class$class))
+
+# Use the NaiveBayes model to predict values from the ensemble
+klar_predict_samples <- predict(klar_nb, ensemble_valid)
+klar_predict_samples$class
+```
+
+```{r}
+# Made the predictions using the Random Forest alone
+rf_valid_1 <- predict(RF, samples, type="class")
+# Looked at the results 
+rf_valid_1
+```
+
+> Above our the five treatment groups that the five samples belong to and the row number that they were removed from. I've included the row number to show that the samples removed were done at random. Additionally, the stacked learner and random forest predict the same classes for all samples. This shows that the models are just as accurate. 
+
+#### Going Forward 
+
+> From the models above it is shown that they can accurately predict whether a sample has down syndrome. Additionally, there was enough data points and high enough accuracy that the models could be built to predict even more information on classes. While the stacked learner was slightly more accurate, the random forest would be the best model to deploy on any future work with this data. The random forest doesn't take a long to build and validate. Additionally, it wasn't possible to perform k-fold cross validation on all of the models due to using the r markdown book. However, if a single random forest algorithm was used, k-fold cross validation could be used very easily to ensure that the values are not by chance. All of the supplemental questions were also answered in the process. It was shown that not all 71 genes were needed to predict the treatment group. The PCA showed that 90% of the variation in the dataset was due to 18 genes. In the model, 30 genes were used, so there wasn't such a large reduction in the dataset. 30 Genes accounted for 95% of the variation in the dataset- that means that the remaining genes only account for the remaining 5%.  This information could be used by reserachers, so they can know what genes don't alter there expression under trisomy conditons. Additionally, this information could be used to develop a therapeutic that targets the gene that are the most effected. The heatmaps show that there are high correlations between some of the genes. Some examples of genes with high correlations to each other would include SNCA_N and TRKA_N,and P38_N and pNR1_N. This information could be very useful to reserachers, since they could see if the genes with high correlations to each other are apart of the same pathway. 
